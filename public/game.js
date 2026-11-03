@@ -44,6 +44,7 @@ function tone(freq, dur, type = 'sine', vol = 0.09, slide = 0) {
 }
 const seq = (notes, step, type = 'triangle', vol = 0.09) => notes.forEach((f, i) => setTimeout(() => tone(f, step * 0.0009, type, vol), i * step));
 const sfx = {
+  undo: () => tone(500, 0.08, 'sine', 0.08, -200),
   drop: (k) => tone(300 + k * 22, 0.05, 'triangle', 0.07),
   store: () => seq([660, 880], 70, 'triangle', 0.08),
   extra: () => seq([523, 659, 784], 80, 'triangle', 0.09),
@@ -65,6 +66,7 @@ let st = null;                      // 컴퓨터 대전 판
 let cpuYou = 0;                     // 컴퓨터 대전에서 내 자리 (0 아래·먼저, 1 위). 다시 하면 서로 바뀐다
 let room = null, netDown = false, waitingNet = false, turnEnd = 0, recorded = '', seenMove = 0, pendingRoom = null;
 let cpuTimer = 0, overTimer = 0, thinking = false, bannerTimer = 0;
+let hist = [];                      // 컴퓨터 대전: 내가 두기 직전의 판들 (무르기용)
 let shown = null;                   // 지금 화면에 보이는 판 (애니메이션 중에는 실제 판과 다르다)
 let animating = false, popIdx = -1, lastIdx = -1, capIdx = [];
 const online = () => mode === 'online';
@@ -150,6 +152,8 @@ function renderHud(m = model()) {
     else text = online() ? `${m.names[m.v.turn]} 차례 · ${sec}초` : '컴퓨터 차례…';
   }
   $('turn').textContent = text;
+  $('undoBtn').style.display = !online() && phase === 'play' && st ? '' : 'none';
+  $('undoBtn').disabled = !hist.length || animating;
   $('resignBtn').style.display = online() && room && room.state === 'playing' ? '' : 'none';
 }
 function say(t) { $('msg').textContent = t; }
@@ -212,7 +216,8 @@ $('rowBottom').addEventListener('pointerdown', (e) => {
   if (!m.v.legal.includes(k)) { sfx.bad(); say('콩이 없는 구덩이예요. 콩이 있는 내 구덩이를 눌러요'); return; }
   dispatch({ type: 'sow', pit: k });
 });
-addEventListener('keydown', (e) => { if (e.code === 'KeyM') toggleMute(); });
+$('undoBtn').onclick = (e) => { e.currentTarget.blur(); undo(); };
+addEventListener('keydown', (e) => { if (e.code === 'KeyZ' && e.target.tagName !== 'INPUT') undo(); if (e.code === 'KeyM') toggleMute(); });
 
 // 내 동작 하나를 낸다 (컴퓨터 판은 바로 적용, 온라인은 서버로)
 function dispatch(a) {
@@ -220,8 +225,10 @@ function dispatch(a) {
   if (!canAct(m)) return;
   if (online()) { waitingNet = true; net.send('act', { action: a }); render(); return; }
   const before = st.board.slice();
+  const snap = JSON.parse(JSON.stringify(st));
   const ev = L.apply(st, a);
   if (!ev) return;
+  hist.push(snap);
   afterMove(before, ev, true);
 }
 function afterMove(before, ev, mine) {
@@ -239,10 +246,20 @@ function afterMove(before, ev, mine) {
 function startCpu(level, you = 0) {
   leaveOnline();
   clearTimeout(cpuTimer); clearTimeout(overTimer);
-  mode = level; cpuYou = you; st = L.newGame(); phase = 'play'; thinking = false; animating = false; turnEnd = 0; shown = null; lastIdx = -1; capIdx = []; popIdx = -1;
+  mode = level; cpuYou = you; st = L.newGame(); hist = []; phase = 'play'; thinking = false; animating = false; turnEnd = 0; shown = null; lastIdx = -1; capIdx = []; popIdx = -1;
   hideOverlay(); builtFor = -2; render();
   say(`내 구덩이는 아래 줄이에요. 구덩이를 눌러 콩을 뿌려요\n${you === 0 ? '내가 먼저 둬요' : '컴퓨터가 먼저 둬요'}`);
   if (you === 1) scheduleCpu();
+}
+// 무르기: 컴퓨터가 응수한 것까지 포함해 내가 두기 직전으로 돌아간다 (컴퓨터 대전에서만, 판이 끝나기 전까지, 콩 뿌리는 모습이 끝난 뒤)
+function undo() {
+  if (online() || phase !== 'play' || !st || !hist.length || animating) return;
+  clearTimeout(cpuTimer); clearTimeout(overTimer); thinking = false;
+  st = hist.pop();
+  shown = null; builtFor = -2; lastIdx = -1; capIdx = []; popIdx = -1;
+  sfx.undo();
+  render();
+  say('한 수 물렀어요. 다시 두세요');
 }
 function scheduleCpu() { thinking = true; render(); cpuTimer = setTimeout(cpuTurn, T.cpu); }
 function cpuTurn() {
@@ -510,6 +527,6 @@ if (loadSession()) {
 else showTitle();
 
 /* @test-hooks:start */
-window.__mc = { get st() { return st; }, get mode() { return mode; }, get phase() { return phase; }, get room() { return room; }, get thinking() { return thinking; }, get animating() { return animating; }, T, dispatch, startCpu, render, model, L };
+window.__mc = { get st() { return st; }, get mode() { return mode; }, get phase() { return phase; }, get room() { return room; }, get thinking() { return thinking; }, get animating() { return animating; }, T, dispatch, startCpu, render, model, L , undo, hist: () => hist, dispatch, showTitle};
 /* @test-hooks:end */
 })();
